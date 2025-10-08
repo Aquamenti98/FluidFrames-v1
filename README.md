@@ -61,6 +61,10 @@ Getting started.
 - [ ] RAM >= 8Gb
 - [ ] Any Directx12 compatible GPU with >= 2GB VRAM
 
+### DirectML backend tuning
+
+FluidFrames now ships with an optimised ONNX Runtime backend for DirectML that targets AMD Radeon RX 7900 XTX class GPUs on Windows 11. Use the new command-line switches to fine tune execution (`--provider`, `--fp16`, `--tilesize`, `--batch`, `--queue-depth`, `--prefetch`). Full usage notes, export instructions for new ONNX models, and benchmarking guidance are available in [docs/directml_backend.md](docs/directml_backend.md).
+
 ## Features.
 - [x] Elegant and easy to use GUI
 - [x] Resize video before interpolation
