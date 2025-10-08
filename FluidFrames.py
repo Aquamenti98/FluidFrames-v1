@@ -1,4 +1,5 @@
 # Standard library imports
+import argparse
 import sys
 from functools  import cache
 from time       import sleep
@@ -58,7 +59,6 @@ from subprocess import (
 # Third-party library imports
 from natsort import natsorted
 from psutil  import virtual_memory as psutil_virtual_memory
-from onnxruntime import InferenceSession as onnxruntime_InferenceSession
 
 from PIL.Image import (
     open      as pillow_image_open,
@@ -114,13 +114,26 @@ from customtkinter import (
     set_default_color_theme
 )
 
+from fluidframes_backend import BackendRuntimeConfig, OnnxRuntimeBackend, add_backend_cli_args
+
 if sys.stdout is None: sys.stdout = open(os_devnull, "w")
 if sys.stderr is None: sys.stderr = open(os_devnull, "w")
+
 
 def find_by_relative_path(relative_path: str) -> str:
     base_path = getattr(sys, '_MEIPASS', os_path_dirname(os_path_abspath(__file__)))
     return os_path_join(base_path, relative_path)
 
+
+def _parse_backend_runtime_config() -> BackendRuntimeConfig:
+    parser = argparse.ArgumentParser(add_help=False)
+    add_backend_cli_args(parser)
+    args, remaining = parser.parse_known_args()
+    sys.argv = [sys.argv[0], *remaining]
+    return BackendRuntimeConfig.from_cli_args(args)
+
+
+BACKEND_RUNTIME_CONFIG = _parse_backend_runtime_config()
 
 
 app_name   = "FluidFrames"
@@ -330,43 +343,47 @@ class AI_interpolation:
     # CLASS INIT FUNCTIONS
 
     def __init__(
-            self, 
-            AI_model_name: str, 
+            self,
+            AI_model_name: str,
             frame_gen_factor: int,
-            directml_gpu: str, 
+            directml_gpu: str,
             AI_input_height: int,
-            AI_input_width: int
+            AI_input_width: int,
+            backend_config: BackendRuntimeConfig | None = None,
         ):
-        
+
         # Passed variables
         self.AI_model_name    = AI_model_name
         self.frame_gen_factor = frame_gen_factor
         self.directml_gpu     = directml_gpu
         self.AI_input_height  = AI_input_height
         self.AI_input_width   = AI_input_width
+        self.backend_config   = backend_config or BACKEND_RUNTIME_CONFIG
 
         # Calculated variables
         self.AI_model_path    = find_by_relative_path(f"AI-onnx{os_separator}{self.AI_model_name}_fp32.onnx")
-        self.inferenceSession = self._load_inferenceSession()
+        self.backend          = self._create_backend()
+        self.inferenceSession = self.backend.session
 
-    def _load_inferenceSession(self) -> onnxruntime_InferenceSession:
-        
-        providers = ['DmlExecutionProvider']
-
+    def _resolve_device_id(self) -> int | None:
         match self.directml_gpu:
-            case 'Auto':        provider_options = [{"performance_preference": "high_performance"}]
-            case 'GPU 1':       provider_options = [{"device_id": "0"}]
-            case 'GPU 2':       provider_options = [{"device_id": "1"}]
-            case 'GPU 3':       provider_options = [{"device_id": "2"}]
-            case 'GPU 4':       provider_options = [{"device_id": "3"}]
+            case 'Auto' | 'auto':
+                return None
+            case gpu if gpu.startswith('GPU'):
+                try:
+                    return max(0, int(gpu.split()[1]) - 1)
+                except (ValueError, IndexError):
+                    return None
+            case _:
+                return None
 
-        inference_session = onnxruntime_InferenceSession(
-            path_or_bytes    = self.AI_model_path, 
-            providers        = providers,
-            provider_options = provider_options
+    def _create_backend(self) -> OnnxRuntimeBackend:
+        device_id = self._resolve_device_id()
+        return OnnxRuntimeBackend(
+            self.AI_model_path,
+            self.backend_config,
+            device_id=device_id,
         )
-
-        return inference_session
 
 
 
@@ -407,11 +424,7 @@ class AI_interpolation:
         return image
 
     def onnxruntime_inference(self, image: numpy_ndarray) -> numpy_ndarray:
-
-        onnx_input  = {self.inferenceSession.get_inputs()[0].name: image}
-        onnx_output = self.inferenceSession.run(None, onnx_input)[0]
-
-        return onnx_output
+        return self.backend.run(image)
 
     def postprocess_output(self, onnx_output: numpy_ndarray) -> numpy_ndarray:
         onnx_output = numpy_squeeze(onnx_output, axis=0)
@@ -1538,7 +1551,14 @@ def generate_video_frames_async(
     
     # MAIN
     
-    AI_instance = AI_interpolation(selected_AI_model, frame_gen_factor, selected_gpu, AI_input_height, AI_input_width)
+    AI_instance = AI_interpolation(
+        selected_AI_model,
+        frame_gen_factor,
+        selected_gpu,
+        AI_input_height,
+        AI_input_width,
+        backend_config=BACKEND_RUNTIME_CONFIG,
+    )
     
     for frame_sequence_pair in frame_sequence_pair_list:
 
